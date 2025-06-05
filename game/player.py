@@ -1,5 +1,6 @@
 import pygame
 import math
+import array
 
 class Player:
     def __init__(self, screen_width, screen_height):
@@ -14,7 +15,13 @@ class Player:
         self.tilt = 0
         self._tilt_target = 0
         self._tilt_speed = 2  # degrees per frame
-        self._thruster_geom = []  # <-- Initialize before _init_ship_surface
+        self._thruster_geom = []
+        # Sound effects (generated)
+        self._move_sound = self._generate_rumble_sound()
+        self._move_sound.set_volume(0.3)
+        self._laser_sound = self._generate_laser_sound()
+        self._laser_sound.set_volume(0.5)
+        self._move_sound_channel = None
         self._init_ship_surface()
 
     def _init_ship_surface(self):
@@ -119,6 +126,15 @@ class Player:
             self.tilt = min(self.tilt + self._tilt_speed, self._tilt_target)
         elif self.tilt > self._tilt_target:
             self.tilt = max(self.tilt - self._tilt_speed, self._tilt_target)
+
+        # Play/stop move sound based on thrust
+        thrusting = (keys[pygame.K_w] or keys[pygame.K_UP] or keys[pygame.K_s] or keys[pygame.K_DOWN])
+        if thrusting:
+            if self._move_sound_channel is None or not self._move_sound_channel.get_busy():
+                self._move_sound_channel = self._move_sound.play(loops=-1)
+        else:
+            if self._move_sound_channel is not None and self._move_sound_channel.get_busy():
+                self._move_sound_channel.fadeout(200)
 
         self._apply_controls(keys)
         self._apply_friction()
@@ -232,6 +248,8 @@ class Player:
             'angle': self.angle - self.tilt
         }
         self.lasers.append(laser)
+        # Play laser sound
+        self._laser_sound.play()
 
     def _draw_lasers(self, screen):
         for laser in self.lasers:
@@ -249,3 +267,42 @@ class Player:
                 (x, y),
                 (end_x, end_y), 2
             )
+
+    def _generate_rumble_sound(self):
+        # Generate a low, smooth rumble (sum of low sine waves, no sawtooth, 28Hz + 54Hz, 0.5s, loopable)
+        sample_rate = 22050
+        duration = 0.5
+        freq1 = 28
+        freq2 = 54
+        n_samples = int(sample_rate * duration)
+        arr = array.array("h")
+        for i in range(n_samples):
+            t = i / sample_rate
+            # Two low sine waves for a richer, smoother rumble
+            val = 0.38 * math.sin(2 * math.pi * freq1 * t)
+            val += 0.22 * math.sin(2 * math.pi * freq2 * t)
+            # Gentle amplitude modulation for a "rolling" feel
+            val *= 0.8 + 0.2 * math.sin(2 * math.pi * 2 * t)
+            arr.append(int(32767 * max(-1, min(1, val))))
+        return pygame.mixer.Sound(buffer=arr)
+
+    def _generate_laser_sound(self):
+        # Generate a short electrical discharge sound (descending square+sine, with noise)
+        sample_rate = 22050
+        duration = 0.13
+        n_samples = int(sample_rate * duration)
+        arr = array.array("h")
+        for i in range(n_samples):
+            t = i / sample_rate
+            # Frequency sweeps from 1800Hz to 400Hz
+            freq = 1800 - 1400 * (t / duration)
+            # Square wave for zap, sine for body, noise for spark
+            square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
+            sine = math.sin(2 * math.pi * freq * t)
+            noise = (2 * (math.sin(2 * math.pi * 60 * t + math.sin(2 * math.pi * 120 * t))) - 1) * (1 - t / duration)
+            val = 0.19 * square + 0.13 * sine + 0.09 * noise
+            # Add a sharp click at the start
+            if i < 10:
+                val += 0.25 * (1 - i / 10)
+            arr.append(int(32767 * max(-1, min(1, val))))
+        return pygame.mixer.Sound(buffer=arr)
