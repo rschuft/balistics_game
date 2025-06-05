@@ -216,12 +216,12 @@ class Player:
 
     def _fire_laser(self):
         laser_speed = 10
-        # Fire from the end of the gun, in the direction the ship is facing (self.angle)
-        rad = math.radians(self.angle)
+        # Fire from the end of the gun, in the direction the ship is facing (self.angle + self.tilt for visual alignment)
+        rad = math.radians(self.angle - self.tilt)
         cx = self.screen_width // 2
         cy = self.screen_height // 2
         tip_dx, tip_dy = self._laser_tip_offset
-        # Rotate the tip offset by the ship's angle
+        # Rotate the tip offset by the ship's angle and tilt
         laser_x = cx + tip_dx * math.cos(rad) - tip_dy * math.sin(rad)
         laser_y = cy + tip_dx * math.sin(rad) + tip_dy * math.cos(rad)
         vx = math.sin(rad) * laser_speed
@@ -229,7 +229,7 @@ class Player:
         laser = {
             'pos': [laser_x, laser_y],
             'vel': [vx, vy],
-            'angle': self.angle
+            'angle': self.angle - self.tilt
         }
         self.lasers.append(laser)
 
