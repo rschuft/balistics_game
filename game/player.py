@@ -4,6 +4,7 @@ import array
 
 from .sound import SoundManager
 from .laser import Laser
+from .saucer import Saucer
 
 class Player:
     def __init__(self, screen_width, screen_height, sound_manager=None):
@@ -20,6 +21,7 @@ class Player:
         self._tilt_speed = 2  # degrees per frame
         self._thruster_geom = []
         self._sound = sound_manager or SoundManager()
+        self._saucer = Saucer(screen_width, screen_height)
         self._init_ship_surface()
 
     def _init_ship_surface(self):
@@ -116,6 +118,8 @@ class Player:
         self._apply_friction()
         self._update_position()
         self._update_lasers()
+        # Update saucer with player position for relative movement
+        self._saucer.update(self.pos)
 
     def _update_tilt(self, keys):
         turning_left = keys[pygame.K_a] or keys[pygame.K_LEFT]
@@ -142,6 +146,7 @@ class Player:
         self._draw_thruster_glow(screen, rect, self._last_thrusting)
         for laser in self.lasers:
             laser.draw(screen)
+        self._saucer.draw(screen, self.pos)
 
     def _draw_thruster_glow(self, screen, rect, show_glow):
         if not show_glow:
