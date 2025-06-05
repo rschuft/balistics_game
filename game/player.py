@@ -2,8 +2,11 @@ import pygame
 import math
 import array
 
+from .sound import SoundManager
+from .laser import Laser
+
 class Player:
-    def __init__(self, screen_width, screen_height):
+    def __init__(self, screen_width, screen_height, sound_manager=None):
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.pos = [0.0, 0.0]
@@ -16,12 +19,7 @@ class Player:
         self._tilt_target = 0
         self._tilt_speed = 2  # degrees per frame
         self._thruster_geom = []
-        # Sound effects (generated)
-        self._move_sound = self._generate_rumble_sound()
-        self._move_sound.set_volume(0.3)
-        self._laser_sound = self._generate_laser_sound()
-        self._laser_sound.set_volume(0.5)
-        self._move_sound_channel = None
+        self._sound = sound_manager or SoundManager()
         self._init_ship_surface()
 
     def _init_ship_surface(self):
@@ -111,89 +109,82 @@ class Player:
         self._laser_tip_offset = (0, -(18 + barrel_length)*scale)
 
     def update(self, keys):
-        turning_left = keys[pygame.K_a] or keys[pygame.K_LEFT]
-        turning_right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
-        # Set tilt target based on turning direction
-        if turning_left and not turning_right:
-            self._tilt_target = 18  # degrees, positive tilt for left
-        elif turning_right and not turning_left:
-            self._tilt_target = -18  # degrees, negative tilt for right
-        else:
-            self._tilt_target = 0  # return to level
-
-        # Smoothly interpolate tilt toward target
-        if self.tilt < self._tilt_target:
-            self.tilt = min(self.tilt + self._tilt_speed, self._tilt_target)
-        elif self.tilt > self._tilt_target:
-            self.tilt = max(self.tilt - self._tilt_speed, self._tilt_target)
-
-        # Play/stop move sound based on thrust
+        self._update_tilt(keys)
         thrusting = (keys[pygame.K_w] or keys[pygame.K_UP] or keys[pygame.K_s] or keys[pygame.K_DOWN])
-        if thrusting:
-            if self._move_sound_channel is None or not self._move_sound_channel.get_busy():
-                self._move_sound_channel = self._move_sound.play(loops=-1)
-        else:
-            if self._move_sound_channel is not None and self._move_sound_channel.get_busy():
-                self._move_sound_channel.fadeout(200)
-
+        self._sound.play_move(thrusting)
         self._apply_controls(keys)
         self._apply_friction()
         self._update_position()
         self._update_lasers()
+
+    def _update_tilt(self, keys):
+        turning_left = keys[pygame.K_a] or keys[pygame.K_LEFT]
+        turning_right = keys[pygame.K_d] or keys[pygame.K_RIGHT]
+        if turning_left and not turning_right:
+            self._tilt_target = 18
+        elif turning_right and not turning_left:
+            self._tilt_target = -18
+        else:
+            self._tilt_target = 0
+        if self.tilt < self._tilt_target:
+            self.tilt = min(self.tilt + self._tilt_speed, self._tilt_target)
+        elif self.tilt > self._tilt_target:
+            self.tilt = max(self.tilt - self._tilt_speed, self._tilt_target)
 
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
             self._fire_laser()
 
     def draw(self, screen):
-        # Draw the ship as a single rotated surface, with tilt
         surf = pygame.transform.rotate(self.ship_surf, -self.angle + self.tilt)
         rect = surf.get_rect(center=(self.screen_width // 2, self.screen_height // 2))
         screen.blit(surf, rect)
         self._draw_thruster_glow(screen, rect, self._last_thrusting)
-        self._draw_lasers(screen)
+        for laser in self.lasers:
+            laser.draw(screen)
 
     def _draw_thruster_glow(self, screen, rect, show_glow):
-        # Draw blue glow from thrusters if show_glow is True, exiting from the end of the thruster farthest from the ship
         if not show_glow:
             return
         scale = 2
         cx, cy = self.screen_width // 2, self.screen_height // 2
-        # Use both angle and tilt for thruster orientation
         angle_rad = math.radians(self.angle - self.tilt)
         glow_length = 18 * scale
         for local_x, local_y, thruster_length in self._thruster_geom:
-            # Center of thruster in world coordinates (with tilt)
-            base_x = cx + local_x * math.cos(angle_rad) - local_y * math.sin(angle_rad)
-            base_y = cy + local_x * math.sin(angle_rad) + local_y * math.cos(angle_rad)
-            back_angle = angle_rad + math.pi
-            # The tip of the thruster is at the end of the ellipse in the back direction
-            tip_x = base_x + math.sin(back_angle) * (thruster_length // 2)
-            tip_y = base_y - math.cos(back_angle) * (thruster_length // 2)
-            # Draw the glow from the tip
-            for i in range(8):
-                frac = i / 8.0
-                start = (
-                    tip_x + math.sin(back_angle) * glow_length * frac,
-                    tip_y - math.cos(back_angle) * glow_length * frac
-                )
-                end = (
-                    tip_x + math.sin(back_angle) * glow_length * (frac + 0.13),
-                    tip_y - math.cos(back_angle) * glow_length * (frac + 0.13)
-                )
-                alpha1 = int(180 * (1 - frac))
-                alpha2 = int(90 * (1 - frac))
-                try:
-                    import pygame.gfxdraw
-                    pygame.gfxdraw.line(screen, int(start[0]), int(start[1]), int(end[0]), int(end[1]), (100, 200, 255, alpha1))
-                    pygame.gfxdraw.line(screen, int(start[0]), int(start[1]), int(end[0]), int(end[1]), (180, 240, 255, alpha2))
-                except ImportError:
-                    glow_surf = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-                    pygame.draw.line(glow_surf, (100, 200, 255, alpha1), start, end, 6*scale//2)
-                    pygame.draw.line(glow_surf, (180, 240, 255, alpha2), start, end, 2*scale)
-                    screen.blit(glow_surf, (0, 0))
+            tip_x, tip_y = self._get_thruster_tip(cx, cy, local_x, local_y, thruster_length, angle_rad)
+            self._draw_thruster_glow_lines(screen, tip_x, tip_y, angle_rad, glow_length, scale)
 
-    # --- Internal methods ---
+    def _get_thruster_tip(self, cx, cy, local_x, local_y, thruster_length, angle_rad):
+        base_x = cx + local_x * math.cos(angle_rad) - local_y * math.sin(angle_rad)
+        base_y = cy + local_x * math.sin(angle_rad) + local_y * math.cos(angle_rad)
+        back_angle = angle_rad + math.pi
+        tip_x = base_x + math.sin(back_angle) * (thruster_length // 2)
+        tip_y = base_y - math.cos(back_angle) * (thruster_length // 2)
+        return tip_x, tip_y
+
+    def _draw_thruster_glow_lines(self, screen, tip_x, tip_y, angle_rad, glow_length, scale):
+        back_angle = angle_rad + math.pi
+        for i in range(8):
+            frac = i / 8.0
+            start = (
+                tip_x + math.sin(back_angle) * glow_length * frac,
+                tip_y - math.cos(back_angle) * glow_length * frac
+            )
+            end = (
+                tip_x + math.sin(back_angle) * glow_length * (frac + 0.13),
+                tip_y - math.cos(back_angle) * glow_length * (frac + 0.13)
+            )
+            alpha1 = int(180 * (1 - frac))
+            alpha2 = int(90 * (1 - frac))
+            try:
+                import pygame.gfxdraw
+                pygame.gfxdraw.line(screen, int(start[0]), int(start[1]), int(end[0]), int(end[1]), (100, 200, 255, alpha1))
+                pygame.gfxdraw.line(screen, int(start[0]), int(start[1]), int(end[0]), int(end[1]), (180, 240, 255, alpha2))
+            except ImportError:
+                glow_surf = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+                pygame.draw.line(glow_surf, (100, 200, 255, alpha1), start, end, 6*scale//2)
+                pygame.draw.line(glow_surf, (180, 240, 255, alpha2), start, end, 2*scale)
+                screen.blit(glow_surf, (0, 0))
 
     def _apply_controls(self, keys):
         # Thrust forward/backward, rotate left/right
@@ -223,11 +214,10 @@ class Player:
 
     def _update_lasers(self):
         for laser in self.lasers:
-            laser['pos'][0] += laser['vel'][0]
-            laser['pos'][1] += laser['vel'][1]
+            laser.update()
         self.lasers = [
             l for l in self.lasers
-            if 0 <= l['pos'][0] <= self.screen_width and 0 <= l['pos'][1] <= self.screen_height
+            if 0 <= l.pos[0] <= self.screen_width and 0 <= l.pos[1] <= self.screen_height
         ]
 
     def _fire_laser(self):
@@ -242,67 +232,6 @@ class Player:
         laser_y = cy + tip_dx * math.sin(rad) + tip_dy * math.cos(rad)
         vx = math.sin(rad) * laser_speed
         vy = -math.cos(rad) * laser_speed
-        laser = {
-            'pos': [laser_x, laser_y],
-            'vel': [vx, vy],
-            'angle': self.angle - self.tilt
-        }
+        laser = Laser([laser_x, laser_y], [vx, vy], self.angle - self.tilt)
         self.lasers.append(laser)
-        # Play laser sound
-        self._laser_sound.play()
-
-    def _draw_lasers(self, screen):
-        for laser in self.lasers:
-            x, y = laser['pos']
-            angle = laser['angle']
-            rad = math.radians(angle)
-            # Laser length and direction
-            length = 20
-            dx = math.sin(rad) * length
-            dy = -math.cos(rad) * length
-            end_x = x + dx
-            end_y = y + dy
-            pygame.draw.line(
-                screen, (255, 0, 0),
-                (x, y),
-                (end_x, end_y), 2
-            )
-
-    def _generate_rumble_sound(self):
-        # Generate a low, smooth rumble (sum of low sine waves, no sawtooth, 28Hz + 54Hz, 0.5s, loopable)
-        sample_rate = 22050
-        duration = 0.5
-        freq1 = 28
-        freq2 = 54
-        n_samples = int(sample_rate * duration)
-        arr = array.array("h")
-        for i in range(n_samples):
-            t = i / sample_rate
-            # Two low sine waves for a richer, smoother rumble
-            val = 0.38 * math.sin(2 * math.pi * freq1 * t)
-            val += 0.22 * math.sin(2 * math.pi * freq2 * t)
-            # Gentle amplitude modulation for a "rolling" feel
-            val *= 0.8 + 0.2 * math.sin(2 * math.pi * 2 * t)
-            arr.append(int(32767 * max(-1, min(1, val))))
-        return pygame.mixer.Sound(buffer=arr)
-
-    def _generate_laser_sound(self):
-        # Generate a short electrical discharge sound (descending square+sine, with noise)
-        sample_rate = 22050
-        duration = 0.13
-        n_samples = int(sample_rate * duration)
-        arr = array.array("h")
-        for i in range(n_samples):
-            t = i / sample_rate
-            # Frequency sweeps from 1800Hz to 400Hz
-            freq = 1800 - 1400 * (t / duration)
-            # Square wave for zap, sine for body, noise for spark
-            square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
-            sine = math.sin(2 * math.pi * freq * t)
-            noise = (2 * (math.sin(2 * math.pi * 60 * t + math.sin(2 * math.pi * 120 * t))) - 1) * (1 - t / duration)
-            val = 0.19 * square + 0.13 * sine + 0.09 * noise
-            # Add a sharp click at the start
-            if i < 10:
-                val += 0.25 * (1 - i / 10)
-            arr.append(int(32767 * max(-1, min(1, val))))
-        return pygame.mixer.Sound(buffer=arr)
+        self._sound.play_laser()
